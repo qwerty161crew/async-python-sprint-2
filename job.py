@@ -1,12 +1,93 @@
+from dataclasses import dataclass
+import json
+import asyncio
+import datetime
+import aiohttp
+import time
+import uuid
+from typing import Optional
+
+
+
 class Job:
-    def __init__(self, start_at="", max_working_time=-1, tries=0, dependencies=[]):
-        pass
+    def __init__(self, start_at: datetime.datetime = None, max_working_time=-1, tries=0, dependencies=None, data=None, state=None):
+        if dependencies is None:
+            dependencies = []
+        self.start_at = start_at
+        self.data = data
+        self.task = None
+        self.set_state(state)
+        self._uuid = uuid.uuid4()
 
-    def run(self):
-        pass
+    def get_state(self, *args, **kwargs):
+        raise NotImplemented
 
-    def pause(self):
-        pass
+    async def start(self):
+        """начинаем исполнение задачи в фоне"""
+        raise NotImplemented
+        # self.task = asyncio.create_task(self.func)
 
-    def stop(self):
-        pass
+    def set_state(self, state: str) -> None:
+        raise NotImplemented
+
+    async def pause(self):
+        raise NotImplemented
+
+    async def stop(self):
+        raise NotImplemented
+
+    @property
+    def identifier(self) -> str:
+        """возвращает уникальный индификатор jobs"""
+        return self._uuid
+
+
+class GetRequestJob(Job):
+    """принимает список ссылок и делает get запросы"""
+    state: dict[dict[str, Optional[str]]]
+
+    def __init__(self, start_at: datetime = None, max_working_time=datetime.timedelta(
+            minutes=1), tries=0, dependencies=None, data: list[str] = None, state=None):
+        """ 
+        data - список ссылок
+        state - статусы работа
+        """
+        super().__init__(start_at, max_working_time, tries, dependencies, data)
+        self.max_working_time = max_working_time
+
+    async def start(self):
+        self.start_time = time.time()
+        self.task = await asyncio.create_task(self._run())
+
+    async def _make_request(self, url) -> str:  # tudo получить строку
+        async with aiohttp.ClientSession() as session:
+            if self.start_time >= 60:
+                # url = 'https://lordserial.la/zarubezhnye/890-bordzhia-3-seasone.html'
+                try:
+                    result = await session.get(url)
+                    result_text = await result.text()
+                except Exception as error:
+                    self.state[url] = dict(result=None, error=str(error))
+                else:
+                    self.state[url] = dict(result=result_text, error=None)
+        return result_text
+
+    def is_finished(self) -> bool:
+        return len(self.state) == len(self.data)
+
+    async def _run(self):
+        for url in self.data:
+            if datetime.timedelta(time.time() - self.start_time) >= self.max_working_time:
+                return
+            if url not in self.state:
+                response = await self._make_request(url)
+                self.state[url] = response
+
+    def get_state(self, *args, **kwargs):
+        return json.dumps(self.state)
+
+    def set_state(self, state: str):
+        if state is None:
+            self.state = {}
+        else:
+            self.state = json.loads(state)
