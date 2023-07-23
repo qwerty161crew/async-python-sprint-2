@@ -1,3 +1,4 @@
+
 from job import GetRequestJob
 from scheduler import Scheduler
 import asyncio
@@ -9,6 +10,8 @@ async def main():
     scheduler = Scheduler()
 
     scheduler.add_jobs(job)
+    await scheduler._read_file(job.identifier)
+    await scheduler.reads_files()
     await scheduler.run()
     while True:
         await asyncio.sleep(0.1)

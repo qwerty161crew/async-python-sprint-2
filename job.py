@@ -1,5 +1,3 @@
-import aiohttp
-
 import json
 import asyncio
 import datetime
@@ -7,20 +5,31 @@ import time
 import uuid
 from typing import Optional
 
+import aiohttp
+
 
 class Job:
-    def __init__(self, start_at: datetime.datetime = None, max_working_time=-1,
-                 tries=0, dependencies=None, data=None, state=None):
-        self.dependencies = dependencies or []
+    def __init__(self, start_at: datetime.datetime = None,
+                 max_working_time: int = -1,
+                 tries: int = 0, dependencies: list = None,
+                 data: dict[dict[str, Optional[str]]] = None,
+                 state: list = None):
+        self.dependencies: list['Job'] = dependencies or []
         self.start_at = start_at
         self.data = data
         self.task = None
         self.set_state(state)
         self._uuid = uuid.uuid4()
 
+    def get_parametrs(self) -> dict:
+        yield {
+            'dependencies': [str(dependencie._uuid) for
+                             dependencie in self.dependencies],
+            'start_at': self.start_at.isoformat() if self.start_at else None,
+        }
+
     def get_state(self, *args, **kwargs):
-        pass
-        # raise NotImplemented
+        raise NotImplemented
 
     async def start(self):
         if self.start_at:
@@ -30,7 +39,7 @@ class Job:
 
     async def _start(self):
         while True:
-            if self._dependencies_are_finished():
+            if await self._dependencies_are_finished():
                 break
             asyncio.sleep(0.1)
 
@@ -45,19 +54,19 @@ class Job:
         await self._start()
 
     def set_state(self, state: str) -> None:
-        pass
-        # raise NotImplemented
+        raise NotImplemented
 
     async def pause(self):
-        pass
-        # raise NotImplemented
+        raise NotImplemented
 
     async def stop(self):
-        pass
-        # raise NotImplemented
+        raise NotImplemented
+
+    def is_finished(self) -> bool:
+        return len(self.state) == len(self.data)
 
     @property
-    def identifier(self) -> str:
+    def identifier(self) -> uuid:
         """возвращает уникальный индификатор jobs"""
         return self._uuid
 
@@ -66,7 +75,7 @@ class GetRequestJob(Job):
     """принимает список ссылок и делает get запросы"""
     state: dict[dict[str, Optional[str]]]
 
-    def __init__(self, start_at: datetime = None,
+    def __init__(self, start_at: datetime.datetime = None,
                  max_working_time=datetime.timedelta(
             minutes=1), tries=0, dependencies=None,
             data: list[str] = None, state=None):
@@ -77,7 +86,7 @@ class GetRequestJob(Job):
         super().__init__(start_at, max_working_time, tries, dependencies, data)
         self.max_working_time = max_working_time
 
-    async def _make_request(self, url) -> str:  # tudo получить строку
+    async def _make_request(self, url) -> str:
         async with aiohttp.ClientSession() as session:
             if self.start_time >= 60:
                 try:
@@ -87,6 +96,8 @@ class GetRequestJob(Job):
                     self.state[url] = dict(result=None, error=str(error))
                 else:
                     self.state[url] = dict(result=result_text, error=None)
+            else:
+                raise RuntimeError('время выполнения задания вышло')
         return result_text
 
     def is_finished(self) -> bool:
