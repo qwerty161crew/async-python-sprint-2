@@ -1,123 +1,68 @@
-import json
-import asyncio
-import datetime
-import time
-import uuid
-from typing import Optional
+from datetime import datetime
+from typing import Optional, Callable
+from functools import wraps
+from enum import Enum
+from logger import get_logger
 
-import aiohttp
+logger = get_logger()
+
+
+def coroutine(func):
+    # декоратор для инициализации генератора
+    @wraps(func)
+    def inner(*args, **kwargs):
+        g = func(*args, **kwargs)
+        g.send(None)
+        return g
+
+    return inner
+
+
+class JobStatus(Enum):
+    COMPLETED = 'completed'
+    RUNNING = 'running'
+    WAITING = 'waiting'
+    CREATED = 'created'
 
 
 class Job:
-    def __init__(self, start_at: datetime.datetime = None,
+    def __init__(self,
+                 target: Callable,
+                 args: Optional[tuple] = None,
+                 kwargs: Optional[dict] = None,
+                 start_at: Optional[datetime] = None,
                  max_working_time: int = -1,
-                 tries: int = 0, dependencies: list = None,
-                 data: dict[dict[str, Optional[str]]] = None,
-                 state: list = None):
-        self.dependencies: list['Job'] = dependencies or []
+                 tries: int = 0,
+                 dependencies: Optional[list] = None,
+                 ):
+        self.target = target
+        self.__args = args or ()
+        self.__kwargs = kwargs or {}
         self.start_at = start_at
-        self.data = data
-        self.task = None
-        self.set_state(state)
-        self._uuid = uuid.uuid4()
-
-    def get_parametrs(self) -> dict:
-        yield {
-            'dependencies': [str(dependencie._uuid) for
-                             dependencie in self.dependencies],
-            'start_at': self.start_at.isoformat() if self.start_at else None,
-        }
-
-    def get_state(self, *args, **kwargs):
-        raise NotImplemented
-
-    async def start(self):
-        if self.start_at:
-            await asyncio.create_task(self._start_at_time(self.start_at))
-        else:
-            await self._start()
-
-    async def _start(self):
-        while True:
-            if await self._dependencies_are_finished():
-                break
-            asyncio.sleep(0.1)
-
-        self.start_time = time.time()
-        self.task = await asyncio.create_task(self._run())
-
-    async def _dependencies_are_finished(self):
-        return all(job.is_finished() for job in self.dependencies)
-
-    async def _start_at_time(self, time: datetime):
-        await asyncio.sleep((datetime.now() - time).total_seconds())
-        await self._start()
-
-    def set_state(self, state: str) -> None:
-        raise NotImplemented
-
-    async def pause(self):
-        raise NotImplemented
-
-    async def stop(self):
-        raise NotImplemented
-
-    def is_finished(self) -> bool:
-        return len(self.state) == len(self.data)
-
-    @property
-    def identifier(self) -> uuid:
-        """возвращает уникальный индификатор jobs"""
-        return self._uuid
-
-
-class GetRequestJob(Job):
-    """принимает список ссылок и делает get запросы"""
-    state: dict[dict[str, Optional[str]]]
-
-    def __init__(self, start_at: datetime.datetime = None,
-                 max_working_time=datetime.timedelta(
-            minutes=1), tries=0, dependencies=None,
-            data: list[str] = None, state=None):
-        """ 
-        data - список ссылок
-        state - статусы работа
-        """
-        super().__init__(start_at, max_working_time, tries, dependencies, data)
         self.max_working_time = max_working_time
+        self.tries = tries
+        self.dependencies = dependencies or []
+        self.is_completed = False
+        self.started_at = None
+        self.generator = None
 
-    async def _make_request(self, url) -> str:
-        async with aiohttp.ClientSession() as session:
-            if self.start_time >= 60:
-                try:
-                    result = await session.get(url)
-                    result_text = await result.text()
-                except Exception as error:
-                    self.state[url] = dict(result=None, error=str(error))
-                else:
-                    self.state[url] = dict(result=result_text, error=None)
-            else:
-                raise RuntimeError('время выполнения задания вышло')
-        return result_text
+    def is_start_time_past(self):
+        if self.start_at:
+            return datetime.now() >= self.start_at
+        return True
 
-    def is_finished(self) -> bool:
-        return len(self.state) == len(self.data)
+    def is_dependencies_completed(self):
+        return all(job.is_completed for job in self.dependencies)
 
-    async def _run(self):
-        for url in self.data:
-            if (datetime.timedelta(time.time()
-                                   - self.start_time)
-                    >= self.max_working_time):
-                return
-            if url not in self.state:
-                response = await self._make_request(url)
-                self.state[url] = response
+    def is_finish_work_time(self):
+        if self.max_working_time <= 0:
+            return False
+        working_time = (datetime.now() - self.started_at).total_seconds()
+        return working_time > self.max_working_time
 
-    def get_state(self, *args, **kwargs):
-        return json.dumps(self.state)
-
-    def set_state(self, state: str):
-        if state is None:
-            self.state = {}
-        else:
-            self.state = json.loads(state)
+    @coroutine
+    def run(self):
+        self.tries -= 1
+        logger.info(f"Job {self.target.__name__} started")
+        self.started_at = datetime.now()
+        yield from self.target(*self.__args, **self.__kwargs)
