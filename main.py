@@ -22,10 +22,12 @@ def start_scheduler():
     job3 = Job(target=create_tmp_dir)
     job4 = Job(target=create_file, dependencies=[job3])
     job5 = Job(target=delete_tmp_dir, dependencies=[job3, job4])
-    job6 = Job(target=job_with_error, tries=4)
 
-    scheduler.add_task([job1.run(), job5.run(), job4.run(),
-                       job2.run(), job3.run(), job6.run()])
+    scheduler.add_task(job1)
+    scheduler.add_task(job5)
+    scheduler.add_task(job4)
+    scheduler.add_task(job2)
+    scheduler.add_task(job3)
 
 
 if __name__ == "__main__":
