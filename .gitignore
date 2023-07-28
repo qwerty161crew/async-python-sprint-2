@@ -2,3 +2,4 @@ file_job/
 .idea/
 __pycache__/
 *.pyc
+venv

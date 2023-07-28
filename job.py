@@ -10,8 +10,8 @@ logger = get_logger()
 def coroutine(func):
     # декоратор для инициализации генератора
     @wraps(func)
-    def inner(*args, **kwargs):
-        g = func(*args, **kwargs)
+    def inner(self, *args, **kwargs):
+        g = func(self, *args, **kwargs)
         g.send(None)
         return g
 

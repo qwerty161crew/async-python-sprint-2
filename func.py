@@ -20,11 +20,15 @@ def create_tmp_dir() -> Generator:
     logger.info("Success create_dir")
 
 
+def get_response():
+    return requests.get("https://ya.ru")
+
+
 def create_file() -> Generator:
     logger.info("Start create_file")
     yield
     logger.info("Get response in create_file")
-    response = requests.get("https://ya.ru")
+    response = get_response()
     yield
     logger.info("create_file: Save to file")
     with open('tmp/response.txt', 'w') as f:

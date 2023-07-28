@@ -1,44 +1,80 @@
-import logging
-from typing import Optional
-
-import logger
+import os
+import pickle
+from collections import deque
 from job import Job
+from logger import get_logger
 
-logger = logging.getLogger(__name__)
+logger = get_logger()
 
 
 class Scheduler:
-    def __init__(self, pool_size: int = 10):
-        self.queue: list = []
-        self.pool_size = pool_size
-        self.job_to_do = Job.run()
+    STORAGE_FILE_STATUS = 'queue.lock'
 
-    def add_task(self, tasks: list[Job]) -> None:
-        length: int = len(tasks)
-        logger.info('Tasks gotten: %(length)s', {'length': length})
-        if length > self.pool_size:
-            for task in tasks[:self.pool_size]:
-                self.queue.append(task)
-        else:
-            for task in tasks:
-                self.queue.append(task)
+    def __init__(self):
+        self.is_running: bool = True
+        self.completed_job = []
+        self.not_completed_job = []
+        self.queue = deque()
+        [self.add_task(job)
+         for job in self.restore_tasks(Scheduler.STORAGE_FILE_STATUS)]
 
-    def get_task(self) -> Optional[Job]:
-        if not self.queue:
-            logger.info('Empty queue')
-            return None
-        task: Job = self.queue.pop(0)
-        logger.info('Got task from queue')
-        return task
+    def add_task(self, job: Job):
+        self.queue.append(job.run())
 
-    def run(self) -> None:
+    @staticmethod
+    def restore_tasks(filename: str):
+        try:
+            with open(filename, 'rb') as f:
+                return pickle.load(f)
+        except FileNotFoundError:
+            return []
+
+    def handle_job(self, job: Job):
+        if not job.is_dependencies_completed() or not job.is_start_time_past():
+            self.add_task(job)
+            return
+
+        if not job.generator:
+            if not self.is_running:
+                self.not_completed_job.append(job)
+                return
+
+            gen = job.run()
+            job.generator = gen
+
+        if job.is_finish_work_time():
+            raise TimeoutError(f"Job {job.target.__name__} timed out.")
+        next(job.generator)
+        self.add_task(job)
+
+    def run(self):
         while True:
-            task: Optional[Job] = self.get_task()
-            if not task:
+            try:
+                job: Job = self.queue.popleft()
+                self.handle_job(job)
+            except IndexError:
+                os.remove(Scheduler.STORAGE_FILE_STATUS) if os.path.exists(Scheduler.STORAGE_FILE_STATUS) else None
                 break
-            self.job_to_do.send((
-                task.func,
-                task.tries,
-                task.start_at,
-                task.max_working_time,
-            ))
+            except TimeoutError:
+                self.completed_job.append(job.target.__name__)
+                job.is_completed = True
+                logger.info(f"Job {job.target.__name__} finish so long")
+            except StopIteration:
+                self.completed_job.append(job.target.__name__)
+                job.is_completed = True
+                logger.info(f"Job {job.target.__name__} finish work")
+            except Exception:
+                logger.exception(f"Job {job.target.__name__} is fail, attempts retries {job.tries}")
+                if job.tries > 0:
+                    self.add_task(job)
+                continue
+
+    def stop(self):
+        self.is_running = False
+        self.run()
+        self._save_tasks(Scheduler.STORAGE_FILE_STATUS, self.not_completed_job)
+
+    @staticmethod
+    def _save_tasks(filename, jobs: list[Job]):
+        with open(filename, 'wb') as f:
+            pickle.dump(jobs, f, protocol=pickle.HIGHEST_PROTOCOL)
